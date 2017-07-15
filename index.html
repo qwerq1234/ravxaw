@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset=utf-8>
+		<title>   </title>
+		<style>
+			body { 
+                margin: 0;
+                overflow: hidden;
+            }
+		</style>
+	</head>
+	<body>
+        <script type="x-shader/x-fragment" id="fg_shader">
+varying vec2 vUV;
+uniform vec2 resolution;
+uniform float time;
+
+#define PROG 2
+
+#define RAY_STEPS 255
+#define EPSILON 0.0001
+#define MAX_DIST 100.0
+
+#if PROG == 0
+float sphereSDF(vec3 p, vec3 pos, float radius) {
+    return length(p - pos) - radius;
+}
+
+float sceneSDF(vec3 p) {
+    return sphereSDF(p, vec3(0), 0.25);
+}
+
+vec3 rayDir(vec2 p, vec2 size, float fov) {
+    vec2 xy = p - size / 2.0;
+    float z = size.y / tan(radians(fov) / 2.0);
+    return normalize(vec3(xy, -z));
+}
+
+void main() {
+    vec2 uv = vUV;
+    // [-1, 1]
+    //uv = 2.66666 * vUV - 1.0;
+    //uv.y = uv.y;
+    // [-res, res]
+    vec2 res = vec2(1, 1);
+    uv = (uv*1.33) * res;
+    
+    vec3 col = vec3(1.0, 0.0, 0.0);
+    
+    vec3 dir = rayDir(uv, res, 45.0);
+    vec3 eye = vec3(0.0, 0.0, 5.5);
+
+    
+    float t = 0.0;
+    for(int i=0;i<RAY_STEPS;i++) {
+        vec3 ray = eye + dir * t;
+        float d = sceneSDF(ray);
+        if(d < EPSILON) {
+            col = vec3(0.0, 0.0, ray.z * 2.0);
+            break;
+        }
+        if(d >= MAX_DIST) {
+            col = vec3(0.0, 1.0, 0.0);
+            break;
+        }
+        t += d;
+    }
+    
+
+    gl_FragData[0] = vec4(col, 1.0);
+}
+#endif
+
+#if PROG == 1
+void main() {
+    vec2 uv = vUV;
+    uv = 2.66666 * vUV - 1.0;
+    uv.y = -uv.y;
+   
+    float W = 16.0; 
+    float t = time;
+
+    float q = sin(uv.x * W - t) + sin(uv.x*uv.y * 2.0- t);
+    float w = sin(uv.y * W - t);
+    float e = sin(uv.x * uv.y - t);
+    float s = q + w * e;
+    
+    vec4 col = vec4(sin(s), sin(s+0.5*3.14), sin(s+3.14), 1.0);
+    gl_FragData[0] = col;
+}            
+#endif
+
+#if PROG == 2
+varying vec3 _posWorld;
+varying vec3 _posModel;
+varying vec3 _posCamera;
+
+uniform sampler2D textures[4];
+uniform float soundData[8];
+
+vec3 plasma(vec3 pos, float W) {
+    float s0 = sin(pos.x * W + time);
+    float s1 = sin(pos.z * W + time);
+    float s2 = cos( ( abs(pos.x*0.5) + pos.z ) * 0.05 + time);
+    
+    float sum = s0 + s1 + s2; 
+    return vec3(abs(sin(sum)));
+}
+
+mat2 rot(float t) {
+    return mat2(
+        vec2(cos(radians(t)), -sin(radians(t))),
+        vec2(sin(radians(t)),  cos(radians(t)))
+    );
+}
+
+bool isNthWall(vec3 pos, int n) {
+    float z0 = -256.0 - ( 512.0 * float(n) );
+    float z1 = z0 - 512.0;
+    return pos.z < z0 && pos.z > z1; 
+}
+
+float rand(float n) {
+    return fract(sin(n) * 43758.5453123);
+}
+
+int randint(float n, float max) {
+    return (int(mod(abs(rand(n)), max)));
+}
+
+
+void main() {
+
+    vec3 col = vec3(0.0);
+
+    mat2 r = rot(sin(time / 8.0) * 90.0);
+    vec2 txc = 0.5 - (_posModel.xz*r)* 0.0025;
+    vec2 txe = 0.5 - (_posModel.xz) * 0.0025;
+
+    float cameraWallOffset = abs(_posCamera.z / 512.0);
+
+    vec3 tex0 = texture2D(textures[0], txc).xyz;
+    vec3 tex1 = texture2D(textures[1], txc).xyz;
+    vec3 tex2 = texture2D(textures[2], txc).xyz;
+    vec3 tex3 = texture2D(textures[3], txc).xyz;
+    
+    float zDist = ( abs(_posCamera.z - _posWorld.z) / 512.0) * 0.25;
+
+    // right wall
+    if(_posWorld.x > 256.0) {
+        col.xyz = tex2.xyz;        
+        for(float i=0.0;i<9.0;i+=3.0) {        
+            if( isNthWall(_posWorld, int(i + cameraWallOffset) ) ) {
+            }
+            else if( isNthWall(_posWorld, int((i+cameraWallOffset)-1.0) ) ) {
+                // plasma sound blinking
+                col = plasma(_posModel, 0.025);
+                col *= vec3(soundData[3] * 0.15, 0.40, soundData[7] * 0.15);
+            }
+            else if( isNthWall(_posWorld, int((i+cameraWallOffset)-2.0) ) ) {
+                // circle sound
+                if(length(_posModel * 0.0025) < 0.35 + (soundData[5] * 0.015) ) {
+                    col = plasma(_posModel, 0.025 + (soundData[4] * 0.0025) );
+                }
+                else
+                    col = vec3(soundData[1] * 0.025, 0.0, 0.35);
+            }
+        }
+    }
+    else if(_posWorld.x < -256.0) {
+        // left wall
+        col.xyz = tex0.xyz;
+        if( isNthWall(_posWorld, int(cameraWallOffset+6.0) ) ) {
+            col = tex2;
+        }
+        if( isNthWall(_posWorld, int(cameraWallOffset+5.0) ) ) {
+            col = mix(tex1, tex2, soundData[5] * 0.25);
+        }
+        if( isNthWall(_posWorld, int(cameraWallOffset+4.0) ) ) {
+            col = mix(tex0, tex1, soundData[5] * 0.25) / 2.0;
+        }
+        if( isNthWall(_posWorld, int(cameraWallOffset+3.0) ) ) {
+            if( sin((_posModel.z-_posModel.x)* 0.025 + time) > 0.0)
+                col = tex1;
+            else {
+                col = plasma(_posModel, 0.0125) + 
+                      vec3(soundData[3] * 0.025, soundData[2] * 0.025, soundData[4] * 0.0025);
+            }
+        }
+        if( isNthWall(_posWorld, int(cameraWallOffset+2.0) ) ) {
+            vec3 pms = _posModel * 0.025;
+            if(sin(pms.z - pms.y + time) > 0.05) 
+                col.g = 1.0 - (soundData[6] * 0.025);
+            if(cos(pms.x - pms.y + time) > 0.05)
+                col.r = 1.0;
+
+        }
+        if( isNthWall(_posWorld, int(cameraWallOffset+1.0) ) ) {
+            // rose
+            col = tex1;
+        }
+        if( isNthWall(_posWorld, int(cameraWallOffset) ) ) {
+            col = vec3(1.0, 0.0, 0.0);        
+        }
+    }
+    else if(_posWorld.x > -256.0 && _posWorld.x < 256.0) {
+        // floor
+        col = plasma(_posModel, 0.015 ) + vec3(zDist*0.025, soundData[3]*0.025, zDist * 0.25);
+        col /= 2.0;
+    }
+
+    // Distance shading
+    col /= 1.5*zDist;
+
+    gl_FragData[0] = vec4(col, 1.0);
+}
+#endif
+
+        </script>
+
+        <script type="x-shader/x-vertex" id="vx_shader">
+varying vec2 vUV;
+uniform float time;
+
+
+varying vec3 _posWorld, _posModel;
+varying vec3 _posCamera;
+
+void main() {
+    vUV = 0.75 * uv;
+    vec3 pos = position;
+
+    vec4 mvPos = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+
+    _posWorld = (modelMatrix * vec4(pos, 1.0)).xyz;
+    _posModel = pos;
+    _posCamera = cameraPosition;
+
+    gl_PointSize = 2.25; 
+
+    gl_Position = mvPos;
+
+}
+        </script>
+        <script src='Stats.js'></script>
+		<script src="three.min.js"></script>
+        <script src="threex.rendererstats.js"></script>
+        <script src="OrbitControls.js"></script>
+        <script src="FirstPersonControls.js"></script>
+        <script src="main.js"></script>
+		<script>
+            init();
+            render();
+		</script>
+	</body>
+</html>
